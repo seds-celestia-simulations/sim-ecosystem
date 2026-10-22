@@ -1,0 +1,178 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 889f87e..d487652 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1335,7 +1335,7 @@ dependencies = [
+  "derive_more",
+  "glam",
+  "libm",
+- "rand",
++ "rand 0.10.3",
+  "serde",
+  "thiserror 2.0.21",
+  "variadics_please",
+@@ -1678,7 +1678,7 @@ dependencies = [
+  "bevy_math",
+  "bevy_reflect",
+  "derive_more",
+- "rand",
++ "rand 0.10.3",
+  "rand_distr",
+  "serde",
+  "thiserror 2.0.21",
+@@ -3072,7 +3072,7 @@ dependencies = [
+  "bytemuck",
+  "encase",
+  "libm",
+- "rand",
++ "rand 0.10.3",
+  "serde_core",
+ ]
+ 
+@@ -4014,6 +4014,17 @@ version = "0.2.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
+ 
++[[package]]
++name = "noise"
++version = "0.9.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6da45c8333f2e152fc665d78a380be060eb84fad8ca4c9f7ac8ca29216cff0cc"
++dependencies = [
++ "num-traits",
++ "rand 0.8.8",
++ "rand_xorshift",
++]
++
+ [[package]]
+ name = "nom"
+ version = "8.0.0"
+@@ -4837,6 +4848,15 @@ version = "0.1.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "019b4b213425016d7d84a153c4c73afb0946fbb4840e4eece7ba8848b9d6da22"
+ 
++[[package]]
++name = "rand"
++version = "0.8.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
++dependencies = [
++ "rand_core 0.6.4",
++]
++
+ [[package]]
+ name = "rand"
+ version = "0.10.3"
+@@ -4844,9 +4864,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+ dependencies = [
+  "getrandom 0.4.3",
+- "rand_core",
++ "rand_core 0.10.1",
+ ]
+ 
++[[package]]
++name = "rand_core"
++version = "0.6.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
++
+ [[package]]
+ name = "rand_core"
+ version = "0.10.1"
+@@ -4860,7 +4886,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
+ dependencies = [
+  "num-traits",
+- "rand",
++ "rand 0.10.3",
++]
++
++[[package]]
++name = "rand_xorshift"
++version = "0.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f"
++dependencies = [
++ "rand_core 0.6.4",
+ ]
+ 
+ [[package]]
+@@ -5425,6 +5460,7 @@ dependencies = [
+  "bevy",
+  "bevy_ecs",
+  "bevy_egui",
++ "noise",
+ ]
+ 
+ [[package]]
+diff --git a/Cargo.toml b/Cargo.toml
+index 7e6ee30..580e6d6 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -7,3 +7,4 @@ edition = "2024"
+ bevy = { version = "0.20.0", features = ["dynamic_linking"] }
+ bevy_ecs = "0.20.0"
+ bevy_egui = "0.43.1"
++noise = "0.9"
+diff --git a/src/main.rs b/src/main.rs
+index 8234777..3b799fb 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -3,6 +3,7 @@ mod creature;
+ mod food;
+ mod sim;
+ mod ui;
++mod worldgen;
+ 
+ use bevy::prelude::*;
+ 
+@@ -16,37 +17,10 @@ fn grid_to_world(p: IVec2) -> Vec2 {
+     p.as_vec2() * TILE_SZ + Vec2::new(TILE_SZ / 2.0, TILE_SZ / 2.0)
+ }
+ 
+-fn setup(
+-    mut commands: Commands,
+-    mut meshes: ResMut<Assets<Mesh>>,
+-    mut materials: ResMut<Assets<ColorMaterial>>,
+-) {
++
++fn setup(mut commands: Commands) {
+     let mid = (GRID_SIZE - 1) as f32 / 2.0;
+-    let mid = Vec2::new(mid, mid);
+-
+-    commands.spawn((Camera2d, Transform::from_xyz(mid.x, mid.y, 0.0)));
+-
+-    let square = meshes.add(Rectangle::new(TILE_SZ, TILE_SZ));
+-    let light = materials.add(Color::srgb(0.72, 0.78, 0.60));
+-    let dark = materials.add(Color::srgb(0.62, 0.69, 0.50));
+-
+-    for i in 0..GRID_SIZE {
+-        for j in 0..GRID_SIZE {
+-            let material = if (i + j) % 2 == 0 {
+-                light.clone()
+-            } else {
+-                dark.clone()
+-            };
+-
+-            let p = grid_to_world(IVec2::new(i, j));
+-
+-            commands.spawn((
+-                Mesh2d(square.clone()),
+-                MeshMaterial2d(material),
+-                Transform::from_xyz(p.x, p.y, 0.0),
+-            ));
+-        }
+-    }
++    commands.spawn((Camera2d, Transform::from_xyz(mid, mid, 0.0)));
+ }
+ 
+ fn main() {
+@@ -56,6 +30,7 @@ fn main() {
+         .add_plugins(camera::CameraControlPlugin)
+         .add_plugins(creature::CreaturePlugin)
+         .add_plugins(ui::UiPlugin)
++        .add_plugins(worldgen::WorldGenPlugin)
+         .add_systems(Startup, setup)
+         .run();
+ }

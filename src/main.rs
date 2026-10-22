@@ -3,6 +3,7 @@ mod creature;
 mod food;
 mod sim;
 mod ui;
+mod worldgen;
 
 use bevy::prelude::*;
 
@@ -16,37 +17,9 @@ fn grid_to_world(p: IVec2) -> Vec2 {
     p.as_vec2() * TILE_SZ + Vec2::new(TILE_SZ / 2.0, TILE_SZ / 2.0)
 }
 
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
+fn setup(mut commands: Commands) {
     let mid = (GRID_SIZE - 1) as f32 / 2.0;
-    let mid = Vec2::new(mid, mid);
-
-    commands.spawn((Camera2d, Transform::from_xyz(mid.x, mid.y, 0.0)));
-
-    let square = meshes.add(Rectangle::new(TILE_SZ, TILE_SZ));
-    let light = materials.add(Color::srgb(0.72, 0.78, 0.60));
-    let dark = materials.add(Color::srgb(0.62, 0.69, 0.50));
-
-    for i in 0..GRID_SIZE {
-        for j in 0..GRID_SIZE {
-            let material = if (i + j) % 2 == 0 {
-                light.clone()
-            } else {
-                dark.clone()
-            };
-
-            let p = grid_to_world(IVec2::new(i, j));
-
-            commands.spawn((
-                Mesh2d(square.clone()),
-                MeshMaterial2d(material),
-                Transform::from_xyz(p.x, p.y, 0.0),
-            ));
-        }
-    }
+    commands.spawn((Camera2d, Transform::from_xyz(mid, mid, 0.0)));
 }
 
 fn main() {
@@ -57,6 +30,7 @@ fn main() {
         .add_plugins(creature::CreaturePlugin)
         .add_plugins(food::FoodPlugin)
         .add_plugins(ui::UiPlugin)
+        .add_plugins(worldgen::WorldGenPlugin)
         .add_systems(Startup, setup)
         .run();
 }
