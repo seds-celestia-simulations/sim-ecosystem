@@ -37,10 +37,7 @@ fn inspector(
         ui.separator();
         ui.heading("State (energy)");
         let frac = (stats.energy / 100.0).clamp(0.0, 1.0);
-        ui.add(
-            egui::ProgressBar::new(frac)
-                .text(format!("{:.1} / {:.0}", stats.energy, 100.0))
-        );
+        ui.add(egui::ProgressBar::new(frac).text(format!("{:.1} / {:.0}", stats.energy, 100.0)));
     });
 }
 

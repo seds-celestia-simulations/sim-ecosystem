@@ -13,7 +13,7 @@ pub const TILE_SZ: f32 = 32.0;
 const GRID_SIZE: i32 = 128;
 
 fn grid_to_world(p: IVec2) -> Vec2 {
-    p.as_vec2() * TILE_SZ + Vec2::new(TILE_SZ / 2.0, TILE_SZ / 2.0)
+    p.as_vec2() * TILE_SZ + Vec2::splat(TILE_SZ / 2.0)
 }
 
 fn setup(
@@ -22,9 +22,9 @@ fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let mid = (GRID_SIZE - 1) as f32 / 2.0;
-    let mid = Vec2::new(mid, mid);
+    let mid = Vec2::splat(mid);
 
-    commands.spawn((Camera2d, Transform::from_xyz(mid.x, mid.y, 0.0)));
+    commands.spawn((Camera2d, Transform::from_translation(mid.extend(0.0))));
 
     let square = meshes.add(Rectangle::new(TILE_SZ, TILE_SZ));
     let light = materials.add(Color::srgb(0.72, 0.78, 0.60));
@@ -43,7 +43,7 @@ fn setup(
             commands.spawn((
                 Mesh2d(square.clone()),
                 MeshMaterial2d(material),
-                Transform::from_xyz(p.x, p.y, 0.0),
+                Transform::from_translation(p.extend(0.0)),
             ));
         }
     }

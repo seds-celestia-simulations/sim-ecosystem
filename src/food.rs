@@ -33,9 +33,9 @@ pub struct FoodDetails {
     digestive efficiency of that creature at consuming the food's kind */
     pub quality: f32,
 
-    /* TODO: decay */
     /* TODO: an explicit range from [-1, 1] for freshness as a newtype,
      * the nutype crate seems interesting for this */
+    /* TODO: visualize freshness, lerp towards gray, ie.: -1 freshness (stale) is gray */
     pub freshness: f32,
     pub kind: FoodKind,
 }

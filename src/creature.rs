@@ -2,27 +2,27 @@ use bevy::prelude::*;
 
 use crate::GRID_SIZE;
 use crate::TILE_SZ;
+use crate::food;
 use crate::food::{Food, FoodKind};
 use crate::grid_to_world;
 use crate::sim::SimParams;
-use crate::food;
 
 #[derive(Component)]
 pub struct Creature;
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub struct GridPos(pub IVec2);
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub struct WorldPos(pub Vec2);
 
 #[derive(Component, Default)]
 pub struct Facing(pub Option<IVec2>);
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub struct Genes {
     pub speed: f32, /* tiles / dt */
-    pub size: f32, /* fraction of TILE_SZ */
+    pub size: f32,  /* fraction of TILE_SZ */
 }
 
 #[derive(Component)]
@@ -30,14 +30,27 @@ pub struct Stats {
     pub energy: f32,
 }
 
+impl Default for Stats {
+    fn default() -> Self {
+        Self { energy: 100.0 }
+    }
+}
+
 pub struct CreaturePlugin;
+
+#[derive(Resource, Default)]
+pub struct Counter(u32);
 
 impl Plugin for CreaturePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SimParams>()
+            .init_resource::<Counter>()
             .add_systems(Startup, spawn)
             .add_systems(Update, (update, facing))
-            .add_systems(FixedUpdate, (start_step, advance, metabolize, die).chain());
+            .add_systems(
+                FixedUpdate,
+                (start_step, advance, metabolize, die, reproduce).chain(),
+            );
     }
 }
 
@@ -90,11 +103,9 @@ fn start_step(mut q: Query<(&mut GridPos, &WorldPos, &Facing), With<Creature>>) 
  *       maybe abstract this to it's own render module?
  * FIXME: introduce an explicit Z-Ordering for shadows, food, creatures, etc. */
 fn update(mut q: Query<(&WorldPos, &mut Transform), Or<(With<Creature>, With<Food>)>>) {
-    /* Introduce z-ordering for isometric projection */
-    const DEPTH_EPS: f32 = 0.001;
-
     for (p, mut t) in &mut q {
-        t.translation = p.0.extend(1.0 + (p.0.x + p.0.y) * DEPTH_EPS);
+        t.translation.x = p.0.x;
+        t.translation.y = p.0.y;
     }
 }
 
@@ -135,37 +146,53 @@ fn die(mut commands: Commands, q: Query<(Entity, &Genes, &WorldPos, &Stats), Wit
     }
 }
 
+fn reproduce(
+    mut commands: Commands,
+    q: Query<(&Genes, &GridPos), With<Creature>>,
+    mut counter: ResMut<Counter>,
+    params: Res<SimParams>,
+) {
+    if counter.0 < params.reproduction_tick.get() {
+        counter.0 += 1;
+        return;
+    }
+
+    counter.0 = 0;
+
+    for (genes, gpos) in &q {
+        let genes_ = genes;
+        let gpos_ = gpos;
+        commands.spawn(spawn_creature(*gpos_, *genes_));
+    }
+}
+
+fn spawn_creature(gpos: GridPos, genes: Genes) -> impl Bundle {
+    let pos = gpos.0.as_vec2() * TILE_SZ;
+    let rect = Vec2::splat(TILE_SZ * genes.size);
+    let sprite = Sprite::from_color(Color::srgb(0.2, 0.7, 0.5), rect);
+
+    (
+        Creature,
+        WorldPos(pos),
+        gpos,
+        genes,
+        Facing::default(),
+        Stats::default(),
+        Transform::default(),
+        Visibility::default(),
+        children![(sprite, Transform::from_translation(pos.extend(0.5)),)],
+    )
+}
+
 fn spawn(mut commands: Commands) {
     /* TODO: procedural color
      * TODO: default position */
 
-    let gposition = IVec2::new(0, 0);
-    let position = gposition.as_vec2() * TILE_SZ;
+    let gpos = GridPos(IVec2::new(0, 0));
     let genes = Genes {
         speed: 4.0,
         size: 0.5,
     };
 
-    let sprite_rect = Vec2::splat(TILE_SZ * genes.size);
-
-    commands
-        .spawn((
-            Creature,
-            WorldPos(position),
-            GridPos(gposition),
-            Facing::default(),
-            genes,
-            Stats { energy: 100.0 },
-            Transform::default(),
-            Visibility::default(),
-        ))
-        .with_children(|c| {
-            c.spawn((
-                Sprite::from_color(
-                    Color::srgb(0.2, 0.7, 0.5),
-                    sprite_rect,
-                ),
-                Transform::from_translation(position.extend(0.5)),
-            ));
-        });
+    commands.spawn(spawn_creature(gpos, genes));
 }
