@@ -29,6 +29,7 @@ pub struct Genes {
 impl Genes {
     fn mutate(&self, rng: &mut impl Rng, params: &Res<SimParams>) -> Self {
         let p = params.gene_pick_probability;
+        let f = params.gene_mutation_factor;
         let mut one = |gene: f32, factor: f32, min: f32, max: f32| -> f32 {
             if rng.random_bool(p.into()) {
                 let range = (1.0 - factor)..(1.0 + factor);
@@ -39,8 +40,9 @@ impl Genes {
         };
 
         Self {
-            speed: one(self.speed, 0.1, 0.1, 10.0),
-            size: one(self.size, 0.1, 0.05, 0.95),
+            /* TODO: move min / max fine-tuning to sim::SimParams */
+            speed: one(self.speed, f, 0.1, 10.0),
+            size: one(self.size, f, 0.05, 0.95),
         }
     }
 }
