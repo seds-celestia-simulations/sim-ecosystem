@@ -31,7 +31,7 @@ impl Genes {
         let p = params.gene_pick_probability;
         let mut one = |gene: f32, factor: f32, min: f32, max: f32| -> f32 {
             if rng.random_bool(p.into()) {
-                let range = (1.0 - factor) .. (1.0 + factor);
+                let range = (1.0 - factor)..(1.0 + factor);
                 gene * rng.random_range(range).clamp(min, max)
             } else {
                 gene
