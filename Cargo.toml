@@ -7,3 +7,4 @@ edition = "2024"
 bevy = { version = "0.20.0", features = ["dynamic_linking"] }
 bevy_ecs = "0.20.0"
 bevy_egui = "0.43.1"
+rand = "0.10.3"

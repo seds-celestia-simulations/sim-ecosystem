@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use rand::{Rng, RngExt};
 
 use crate::GRID_SIZE;
 use crate::TILE_SZ;
@@ -23,6 +24,25 @@ pub struct Facing(pub Option<IVec2>);
 pub struct Genes {
     pub speed: f32, /* tiles / dt */
     pub size: f32,  /* fraction of TILE_SZ */
+}
+
+impl Genes {
+    fn mutate(&self, rng: &mut impl Rng, params: &Res<SimParams>) -> Self {
+        let p = params.gene_pick_probability;
+        let mut one = |gene: f32, factor: f32, min: f32, max: f32| -> f32 {
+            if rng.random_bool(p.into()) {
+                let range = (1.0 - factor) .. (1.0 + factor);
+                gene * rng.random_range(range).clamp(min, max)
+            } else {
+                gene
+            }
+        };
+
+        Self {
+            speed: one(self.speed, 0.1, 0.1, 10.0),
+            size: one(self.size, 0.1, 0.05, 0.95),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -146,6 +166,26 @@ fn die(mut commands: Commands, q: Query<(Entity, &Genes, &WorldPos, &Stats), Wit
     }
 }
 
+fn in_bounds(p: IVec2) -> bool {
+    p.cmpge(IVec2::ZERO).all() && p.cmplt(IVec2::splat(GRID_SIZE)).all()
+}
+
+fn pick_direction(gpos: &GridPos) -> GridPos {
+    for i in -1..=1 {
+        for j in -1..=1 {
+            if i == 0 && j == 0 {
+                continue;
+            }
+            let p = gpos.0 + IVec2::new(i, j);
+            if in_bounds(p) {
+                return GridPos(p);
+            }
+        }
+    }
+
+    panic!("atleast one direction should be in bounds")
+}
+
 fn reproduce(
     mut commands: Commands,
     q: Query<(&Genes, &GridPos), With<Creature>>,
@@ -160,9 +200,10 @@ fn reproduce(
     counter.0 = 0;
 
     for (genes, gpos) in &q {
-        let genes_ = genes;
-        let gpos_ = gpos;
-        commands.spawn(spawn_creature(*gpos_, *genes_));
+        let mut rng = rand::rng();
+        let genes_ = genes.mutate(&mut rng, &params);
+        let gpos_ = pick_direction(gpos);
+        commands.spawn(spawn_creature(gpos_, genes_));
     }
 }
 
