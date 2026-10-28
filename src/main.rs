@@ -1,6 +1,7 @@
 mod camera;
 mod creature;
 mod food;
+mod graph;
 mod ranged;
 mod sim;
 mod ui;
@@ -31,6 +32,7 @@ fn main() {
         .add_plugins(creature::CreaturePlugin)
         .add_plugins(food::FoodPlugin)
         .add_plugins(ui::UiPlugin)
+        .add_plugins(graph::GraphPlugin)
         .add_plugins(worldgen::WorldGenPlugin)
         .add_systems(Startup, setup)
         .run();
