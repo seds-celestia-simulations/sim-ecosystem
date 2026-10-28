@@ -1,6 +1,7 @@
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_egui::EguiContexts;
 
 use crate::creature::{Creature, WorldPos};
 
@@ -74,8 +75,16 @@ fn follow_camera(
 fn zoom(
     scroll: Res<AccumulatedMouseScroll>,
     mut projection: Single<&mut Projection, With<Camera2d>>,
+    mut contexts: EguiContexts,
 ) {
     if scroll.delta.y == 0.0 {
+        return;
+    }
+    // UI scrolling must not also zoom the simulation underneath it.
+    if contexts
+        .ctx_mut()
+        .is_ok_and(|ctx| ctx.is_pointer_over_egui() || ctx.egui_wants_pointer_input())
+    {
         return;
     }
 

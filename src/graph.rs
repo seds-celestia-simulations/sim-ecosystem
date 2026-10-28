@@ -9,11 +9,18 @@ use std::collections::VecDeque;
 
 const INTERVAL: f64 = 0.5;
 const MAX_SAMPLES: usize = 1800;
-const COLORS: [egui::Color32; 2] = [
+const COLORS: [egui::Color32; 4] = [
     egui::Color32::from_rgb(70, 180, 255),
     egui::Color32::from_rgb(255, 175, 65),
+    egui::Color32::from_rgb(140, 220, 150),
+    egui::Color32::from_rgb(200, 150, 255),
 ];
-const LABELS: [&str; 2] = ["Speed (tiles/s)", "Size (tile fraction)"];
+const LABELS: [&str; 4] = [
+    "Speed (tiles/s)",
+    "Size (tile fraction)",
+    "Diet (-1 meat, +1 plants)",
+    "Vision radius (tiles)",
+];
 
 pub struct GraphPlugin;
 impl Plugin for GraphPlugin {
@@ -22,20 +29,32 @@ impl Plugin for GraphPlugin {
             .add_systems(EguiPrimaryContextPass, graph);
     }
 }
-#[derive(Default, Resource)]
+#[derive(Resource)]
 struct GraphState {
     drag_start: Option<Vec2>,
     draft: Option<Rect>,
     region: Option<Rect>,
-    baseline: Option<[f32; 2]>,
     history: VecDeque<Sample>,
     started: f64,
     last_sample: Option<f64>,
 }
+impl Default for GraphState {
+    fn default() -> Self {
+        Self {
+            drag_start: None,
+            draft: None,
+            region: None,
+            history: VecDeque::new(),
+            started: 0.0,
+            last_sample: None,
+        }
+    }
+}
 struct Sample {
     time: f64,
     count: usize,
-    mean: Option<[f32; 2]>,
+    mean: Option<[f32; 4]>,
+    bounds: Option<([f32; 4], [f32; 4])>,
 }
 // Include the starting and ending tiles, irrespective of drag direction.
 fn snapped_box(start: Vec2, end: Vec2) -> Rect {
@@ -46,13 +65,6 @@ fn snapped_box(start: Vec2, end: Vec2) -> Rect {
     };
     let (a, b) = (tile(start), tile(end));
     Rect::from_corners(a.min(b) * TILE_SZ, (a.max(b) + Vec2::ONE) * TILE_SZ)
-}
-fn percent(value: f32, baseline: f32) -> Option<f32> {
-    if baseline.abs() < 1e-6 {
-        return None;
-    }
-    let result = 100.0 * (value / baseline - 1.0);
-    result.is_finite().then_some(result)
 }
 
 fn graph(
@@ -137,7 +149,8 @@ fn graph(
         }
     }
     // Share one membership check between live highlights, count, and sampled averages.
-    let (mut count, mut total) = (0, [0.0; 2]);
+    let (mut count, mut total) = (0, [0.0; 4]);
+    let (mut minimum, mut maximum) = ([f32::INFINITY; 4], [f32::NEG_INFINITY; 4]);
     for (pos, genes) in &creatures {
         let center = pos.0 + Vec2::new(0.0, TILE_SZ * 0.25);
         if !state
@@ -147,21 +160,29 @@ fn graph(
             continue;
         }
         count += 1;
-        total[0] += genes.speed;
-        total[1] += genes.size;
+        let values = [
+            genes.speed,
+            genes.size,
+            genes.diet.into_inner() as f32,
+            genes.vision_radius as f32,
+        ];
+        for i in 0..4 {
+            total[i] += values[i];
+            minimum[i] = minimum[i].min(values[i]);
+            maximum[i] = maximum[i].max(values[i]);
+        }
         if let Some(p) = screen(center) {
             painter.circle_stroke(p, 9.0, egui::Stroke::new(1.5, COLORS[0]));
         }
     }
     let mean = (count > 0).then(|| total.map(|v| v / count as f32));
+    let bounds = (count > 0).then_some((minimum, maximum));
     if state.region.is_some() && state.last_sample.is_none_or(|last| now - last >= INTERVAL) {
-        if state.baseline.is_none() {
-            state.baseline = mean;
-        }
         let sample = Sample {
             time: now - state.started,
             count,
             mean,
+            bounds,
         };
         state.history.push_back(sample);
         if state.history.len() > MAX_SAMPLES {
@@ -171,6 +192,7 @@ fn graph(
     }
     egui::Window::new("Regional gene graph")
         .default_width(560.0)
+        .vscroll(true)
         .show(ctx, |ui| {
             ui.label(
                 "Left-drag a box; edges snap to whole tiles. Release to select; Escape cancels.",
@@ -192,18 +214,14 @@ fn graph(
             if let Some(latest) = state.history.back() {
                 ui.small(format!("Last recorded count: {}", latest.count));
             }
-            let Some(baseline) = state.baseline else {
-                ui.label("Waiting for a nonempty sample to set the baseline.");
-                return;
-            };
             egui::Grid::new("gene_values").striped(true).show(ui, |ui| {
-                for heading in ["Gene", "Initial mean", "Latest sampled mean"] {
+                for heading in ["Gene", "Highest inside now", "Latest sampled mean"] {
                     ui.label(heading);
                 }
                 ui.end_row();
-                for i in 0..2 {
+                for i in 0..4 {
                     ui.colored_label(COLORS[i], LABELS[i]);
-                    ui.label(format!("{:.3}", baseline[i]));
+                    ui.label(bounds.map_or_else(|| "-".into(), |(_, max)| format!("{:.3}", max[i])));
                     ui.label(
                         state
                             .history
@@ -214,23 +232,29 @@ fn graph(
                     ui.end_row();
                 }
             });
-            ui.label("Y: change from initial mean (%) | X: simulation seconds since selection");
-            ui.small(
-                "0% = initial mean; +20% = 1.2x. Sampled every 0.5s; last 15 minutes retained.",
-            );
-            if baseline.iter().any(|v| v.abs() < 1e-6) {
-                ui.label("Zero initial mean: percentage curve unavailable.");
-            }
+            ui.label("Y: raw regional mean | X: simulation seconds since selection");
+            ui.small("Sampled every 0.5s; last 15 minutes retained. Diet is fixed at -1 to +1; other axis tops use current individual maxima.");
+            ui.small("Past values above the current maximum are clipped. Empty regions keep the last nonempty scale.");
             if count == 0 {
                 ui.label("Area empty: recording gaps; new arrivals are included automatically.");
             }
-            plot(ui, &state, baseline);
+            let scale = bounds.or_else(|| state.history.iter().rev().find_map(|s| s.bounds));
+            for gene in 0..4 {
+                ui.colored_label(COLORS[gene], LABELS[gene]);
+                if gene == 2 {
+                    plot(ui, &state, gene, -1.0, 1.0);
+                } else if let Some((min, max)) = scale {
+                    plot(ui, &state, gene, min[gene], max[gene]);
+                } else {
+                    ui.label("Waiting for creatures in this region.");
+                }
+            }
         });
 }
 
-fn plot(ui: &mut egui::Ui, state: &GraphState, baseline: [f32; 2]) {
+fn plot(ui: &mut egui::Ui, state: &GraphState, gene: usize, minimum: f32, high: f32) {
     let (response, painter) = ui.allocate_painter(
-        egui::vec2(ui.available_width().max(200.0), 260.0),
+        egui::vec2(ui.available_width().max(200.0), 180.0),
         egui::Sense::hover(),
     );
     let chart = egui::Rect::from_min_max(
@@ -243,20 +267,9 @@ fn plot(ui: &mut egui::Ui, state: &GraphState, baseline: [f32; 2]) {
         .back()
         .map_or(first + 1.0, |s| s.time)
         .max(first + 1.0);
-    let (mut low, mut high) = (-10.0_f32, 10.0_f32);
-    for sample in &state.history {
-        if let Some(mean) = sample.mean {
-            for i in 0..2 {
-                if let Some(y) = percent(mean[i], baseline[i]) {
-                    low = low.min(y);
-                    high = high.max(y);
-                }
-            }
-        }
-    }
-    let padding = (high - low) * 0.1;
-    low -= padding;
-    high += padding;
+    let low = minimum.min(0.0);
+    // Keep the top exactly at the regional maximum, including all-zero regions.
+    let low = if high > low { low } else { high - 1.0 };
     let project = |t: f64, y: f32| {
         egui::pos2(
             chart.left() + ((t - first) / (end - first)) as f32 * chart.width(),
@@ -274,7 +287,7 @@ fn plot(ui: &mut egui::Ui, state: &GraphState, baseline: [f32; 2]) {
         painter.text(
             p - egui::vec2(5.0, 0.0),
             egui::Align2::RIGHT_CENTER,
-            format!("{y:.1}%"),
+            format!("{y:.3}"),
             font.clone(),
             egui::Color32::LIGHT_GRAY,
         );
@@ -291,12 +304,13 @@ fn plot(ui: &mut egui::Ui, state: &GraphState, baseline: [f32; 2]) {
         [project(first, 0.0), project(end, 0.0)],
         egui::Stroke::new(1.0, egui::Color32::GRAY),
     );
-    for gene in 0..2 {
+    {
+        let painter = painter.with_clip_rect(chart);
         let mut previous = None;
         for sample in &state.history {
             let point = sample
                 .mean
-                .and_then(|m| percent(m[gene], baseline[gene]))
+                .map(|m| m[gene])
                 .map(|y| project(sample.time, y));
             if let Some(p) = point {
                 if let Some(last) = previous {
