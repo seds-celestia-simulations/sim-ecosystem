@@ -65,50 +65,16 @@ pub struct CreaturePlugin;
 #[derive(Resource, Default)]
 pub struct Counter(u32);
 
-#[derive(Resource)]
-pub struct SpawnSettings {
-    pub batch_size: usize,
-    pub pending: usize,
-}
-
-impl Default for SpawnSettings {
-    fn default() -> Self {
-        Self {
-            batch_size: 100,
-            pending: 0,
-        }
-    }
-}
-
 impl Plugin for CreaturePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SimParams>()
             .init_resource::<Counter>()
-            .init_resource::<SpawnSettings>()
             .add_systems(Startup, spawn)
-            .add_systems(Update, (spawn_random, update).chain())
+            .add_systems(Update, update)
             .add_systems(
                 FixedUpdate,
                 (facing, start_step, advance, metabolize, die, reproduce).chain(),
             );
-    }
-}
-
-fn spawn_random(mut commands: Commands, mut settings: ResMut<SpawnSettings>) {
-    if settings.pending == 0 {
-        return;
-    }
-    let mut rng = rand::rng();
-    for _ in 0..std::mem::take(&mut settings.pending) {
-        let grid = GridPos(IVec2::new(
-            rng.random_range(0..GRID_SIZE),
-            rng.random_range(0..GRID_SIZE),
-        ));
-        let genes = Genes {
-            speed: rng.random_range(0.5..=8.0),
-            size: rng.random_range(0.1..=0.95),
-        };
-        commands.spawn(spawn_creature(grid, genes));
     }
 }
 
@@ -256,7 +222,7 @@ fn reproduce(
 }
 
 fn spawn_creature(gpos: GridPos, genes: Genes) -> impl Bundle {
-    let pos = grid_to_world(gpos.0);
+    let pos = gpos.0.as_vec2() * TILE_SZ;
     let rect = Vec2::splat(TILE_SZ * genes.size);
     let sprite = Sprite::from_color(Color::srgb(0.2, 0.7, 0.5), rect);
 
@@ -269,7 +235,7 @@ fn spawn_creature(gpos: GridPos, genes: Genes) -> impl Bundle {
         Stats::default(),
         Transform::default(),
         Visibility::default(),
-        children![(sprite, Transform::from_xyz(0.0, TILE_SZ * 0.25, 0.5),)],
+        children![(sprite, Transform::from_translation(pos.extend(0.5)),)],
     )
 }
 

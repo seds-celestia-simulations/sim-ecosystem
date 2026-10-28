@@ -2,17 +2,14 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::camera::Follow;
-use crate::creature::{Creature, Genes, GridPos, SpawnSettings, Stats};
+use crate::creature::{Creature, Genes, GridPos, Stats};
 use crate::sim::SimParams;
 
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            EguiPrimaryContextPass,
-            (population_counter, inspector, params_panel),
-        );
+        app.add_systems(EguiPrimaryContextPass, (inspector, params_panel));
     }
 }
 
@@ -49,25 +46,4 @@ fn params_panel(mut contexts: EguiContexts, mut params: ResMut<SimParams>) {
     egui::Window::new("Sim params").show(ctx, |ui| {
         ui.add(egui::Slider::new(&mut params.base_cost, 0.0..=5.0).text("base cost"));
     });
-}
-
-fn population_counter(
-    mut contexts: EguiContexts,
-    creatures: Query<(), With<Creature>>,
-    mut spawning: ResMut<SpawnSettings>,
-) {
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-    egui::Window::new("Population")
-        .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -12.0])
-        .resizable(false)
-        .collapsible(false)
-        .show(ctx, |ui| {
-            ui.strong(format!("Living creatures: {}", creatures.iter().count()));
-            ui.add(egui::Slider::new(&mut spawning.batch_size, 1..=1000).text("spawn count"));
-            if ui.button("Spawn random creatures").clicked() {
-                spawning.pending += spawning.batch_size;
-            }
-        });
 }
