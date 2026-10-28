@@ -6,6 +6,7 @@ use crate::sim::SimParams;
 use crate::worldgen::WorldGrid;
 use crate::{grid_to_world, world_to_grid};
 use rand::RngExt;
+use crate::ranged::UnitInterval;
 
 #[derive(Clone, Copy)]
 pub enum FoodKind {
@@ -43,7 +44,7 @@ pub struct FoodDetails {
     /* TODO: an explicit range from [-1, 1] for freshness as a newtype,
      * the nutype crate seems interesting for this */
     /* TODO: visualize freshness, lerp towards gray, ie.: -1 freshness (stale) is gray */
-    pub freshness: f32,
+    pub freshness: UnitInterval,
     pub kind: FoodKind,
 }
 
@@ -58,16 +59,18 @@ fn decay(
 ) {
     for (mut details, pos) in &mut q {
         let cell = world_to_grid(pos.0);
-        let multiplier = world.biome_at(cell).map_or(1.0, |b| b.decay_multiplier());
+        let biome_multiplier = world.biome_at(cell).map_or(1.0, |b| b.decay_multiplier());
 
-        details.freshness -= params.food_decay_rate * time.delta_secs() * multiplier / 5.0; /*Last number is to be edited so that the actual creatures cant finish off the food */
+        let mut f = details.freshness.into_inner() as f32;
+        f -= params.food_decay_rate * time.delta_secs() * biome_multiplier * 0.2;
+        details.freshness = UnitInterval::new_clamped(f.into());
     }
 }
 
 fn decompose(mut commands: Commands, q: Query<(Entity, &FoodDetails, &WorldPos), With<Food>>) {
     let mut rng = rand::rng();
     for (entity, details, pos) in &q {
-        if details.freshness <= -1.0 {
+        if details.freshness.into_inner() <= 0.0 {
             commands.entity(entity).despawn();
             if matches!(details.kind, FoodKind::Plant) {
                 regrow_plants(&mut commands, pos.0, &mut rng);
@@ -91,7 +94,7 @@ fn regrow_plants(commands: &mut Commands, pos: Vec2, rng: &mut impl rand::Rng) {
         let offset = IVec2::new(rng.random_range(-3..=3), rng.random_range(-3..=3));
         let new_cell = (cell + offset).clamp(IVec2::ZERO, IVec2::splat(GRID_SIZE - 1));
         let quality = rng.random_range(0.5..1.0);
-        let freshness = rng.random_range(-0.5..1.0);
+        let freshness = UnitInterval::try_new(rng.random_range(0.5..1.0)).unwrap();
         commands.spawn(bundle(
             grid_to_world(new_cell),
             FoodKind::Plant,
@@ -101,7 +104,7 @@ fn regrow_plants(commands: &mut Commands, pos: Vec2, rng: &mut impl rand::Rng) {
     }
 }
 
-pub fn bundle(pos: Vec2, kind: FoodKind, quality: f32, freshness: f32) -> impl Bundle {
+pub fn bundle(pos: Vec2, kind: FoodKind, quality: f32, freshness: UnitInterval) -> impl Bundle {
     /* TODO: food size proportional to quality */
     let sz = 8.0;
 

@@ -4,6 +4,8 @@ use rand::RngExt;
 
 use crate::food::{FoodKind, bundle};
 use crate::{GRID_SIZE, TILE_SZ, grid_to_world};
+use crate::ranged::UnitInterval;
+
 
 // ---------------------------------------------------------------------------
 // Tunables
@@ -311,6 +313,7 @@ fn spawn_plants(mut commands: Commands, world: Res<WorldGrid>) {
 
             let quality = rng.random_range(0.5..1.0);
             let freshness = rng.random_range(-0.5..1.0);
+            let freshness = UnitInterval::new_clamped(freshness);
             commands.spawn(bundle(
                 grid_to_world(cell),
                 FoodKind::Plant,

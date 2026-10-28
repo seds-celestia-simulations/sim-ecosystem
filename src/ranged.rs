@@ -17,3 +17,16 @@ pub struct UnitInterval(f64);
     derive(Clone, Copy, PartialEq, Eq, PartialOrd, Display)
 )]
 pub struct SignedUnitInterval(f64);
+
+impl UnitInterval {
+    pub fn new_clamped(f: f64) -> Self {
+        Self::try_new(
+            if f.is_nan() {
+                0.0
+            } else {
+                f.clamp(0.0, 1.0)
+            }
+        )
+        .unwrap()
+    }
+}

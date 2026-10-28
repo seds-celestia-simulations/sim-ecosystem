@@ -5,11 +5,11 @@ use rand::{Rng, RngExt, seq::IteratorRandom};
 use crate::GRID_SIZE;
 use crate::TILE_SZ;
 use crate::food;
-use crate::food::{Food, FoodKind};
+use crate::food::{Food, FoodKind, FoodDetails};
 use crate::grid_to_world;
 use crate::sim::SimParams;
 
-use crate::ranged::{NoNaNF32, SignedUnitInterval};
+use crate::ranged::{NoNaNF32, SignedUnitInterval, UnitInterval};
 
 #[derive(Component)]
 pub struct Creature;
@@ -178,7 +178,11 @@ fn metabolize(
         /* TODO: possibly a better abstraction for calculating cost of particular
          * characterestics / stats? */
 
-        let cost = params.base_cost * genes.size.powf(0.75) * genes.speed.powf(2.0) * moving;
+        let size_cost = genes.size.powf(3.0) * params.base_cost;
+        let speed_cost = genes.speed.powf(2.0) * moving;
+        let vision_cost = genes.vision_radius as f32 * 0.05;
+
+        let cost = size_cost + speed_cost + vision_cost;
 
         stats.energy -= (time.delta_secs() * cost).max(0.0);
     }
@@ -187,19 +191,18 @@ fn metabolize(
 fn eat(
     mut commands: Commands,
     mut qcreature: Query<(&WorldPos, &mut Stats), With<Creature>>,
-    qfood: Query<(Entity, &WorldPos), With<Food>>,
+    qfood: Query<(Entity, &WorldPos, &FoodDetails), With<Food>>,
 ) {
     // Half a tile's diagonal reaches every point in a tile from its center.
     let eat_radius_squared = TILE_SZ * TILE_SZ / 2.0;
     let mut eaten = EntityHashSet::default();
 
     for (pos, mut stats) in &mut qcreature {
-        for (entity, food_pos) in &qfood {
+        for (entity, food_pos, food_details) in &qfood {
             if pos.0.distance_squared(food_pos.0) <= eat_radius_squared && eaten.insert(entity) {
                 /* TODO: diet */
                 /* TODO: how do creatures know food isn't fresh? */
-                // energy += food_details.quality * food_details.freshness * 100.0;
-                stats.energy += 10.0;
+                stats.energy += food_details.quality * food_details.freshness.into_inner() as f32 * 2.0;
                 commands.entity(entity).despawn();
             }
         }
@@ -213,7 +216,7 @@ fn die(mut commands: Commands, q: Query<(Entity, &Genes, &WorldPos, &Stats), Wit
                 pos.0,
                 FoodKind::Carcass,
                 20.0,
-                1.0, /* TODO: food quality proportional to size gene and energy */
+                UnitInterval::try_new(1.0).unwrap(),
             ));
 
             commands.entity(entity).despawn();
@@ -257,7 +260,14 @@ fn reproduce(
 fn spawn_creature(gpos: GridPos, genes: Genes) -> impl Bundle {
     let pos = grid_to_world(gpos.0);
     let rect = Vec2::splat(TILE_SZ * genes.size);
-    let sprite = Sprite::from_color(Color::srgb(0.2, 0.7, 0.5), rect);
+
+    let red = Color::srgb(0.8588, 0.0274, 0.0274);
+    let green = Color::srgb(0.4784, 1.0, 0.3490);
+    let t = (genes.diet.into_inner() + 1.0) / 2.0;
+
+    let color = red.mix(&green, t as f32);
+
+    let sprite = Sprite::from_color(color, rect);
 
     (
         Creature,
@@ -278,7 +288,7 @@ fn spawn(mut commands: Commands) {
 
     let gpos = GridPos(IVec2::new(0, 0));
     let genes = Genes {
-        speed: 0.5,
+        speed: 4.0,
         size: 0.5,
         vision_radius: 10,
         diet: SignedUnitInterval::try_new(0.0).unwrap(),
