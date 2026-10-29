@@ -112,29 +112,31 @@ impl Plugin for CreaturePlugin {
 /// Lower is better. None = not worth considering.
 fn hunting_cost(
     prey_size: f32,
-    e_gain: f32,     // energy the corpse will give (your corpse formula)
-    dist: f32,       // tiles
-    attack: f32,     // attack gene: energy drained per second, before / size
-    aggression: f32, // -diet, in [-1, 1]
-    c_move: f32,     // energy per tile
-    idle_burn: f32,  // burn rate while standing still
+    dist: f32, // tiles
+    hunter: &Genes,
     p: &SimParams,
 ) -> Option<f64> {
-    if aggression <= p.min_aggression || attack <= 0.0 || prey_size <= 0.0 {
+    if !can_hunt(hunter, p) || hunter.attack <= 0.0 || prey_size <= 0.0 {
         return None;
     }
 
-    let fight_secs = p.max_energy * prey_size / attack;
+    let e_gain = food_energy(hunter, &corpse_food(&p, prey_size));
+    let fight_secs = p.max_energy * prey_size / hunter.attack;
 
-    let chase = dist * c_move;
-    let fight = fight_secs * idle_burn;
+    let chase = dist * move_cost_per_tile(hunter, p);
+    let fight = fight_secs * (burn_rate(hunter, p, 0.0) + attack_burn(hunter, p));
 
     // Don't hunt at a loss
     if chase + fight >= e_gain {
         return None;
     }
 
-    Some(((chase + fight) / (e_gain * aggression)).into())
+    Some(((chase + fight) / e_gain).into())
+}
+
+fn can_hunt(genes: &Genes, params: &SimParams) -> bool {
+    let aggression = -genes.diet.into_inner();
+    aggression > 0.0 && aggression > params.min_aggression.into()
 }
 
 fn attack(
@@ -153,8 +155,7 @@ fn attack(
         if stats.energy <= 0.0 {
             continue;
         }
-        let aggression = -genes.diet.into_inner();
-        if aggression <= params.min_aggression.into() {
+        if !can_hunt(genes, &params) {
             continue;
         }
 
@@ -193,28 +194,22 @@ fn facing(
     params: Res<SimParams>,
 ) {
     for (me, mut facing, gpos, pos, genes) in &mut qcreature {
-        let r = genes.vision_radius as f32 * TILE_SZ;
+        let r = genes.vision_radius as f32;
+        let c_move = move_cost_per_tile(genes, &params);
 
         /* TODO: move cost determination to a new function
          * decoupled from path-finding */
         let food_cost = |food: (&WorldPos, &FoodDetails)| {
             let (food_pos, details) = food;
-            let dist = (food_pos.0 - pos.0).length();
-            let kind = match details.kind {
-                FoodKind::Plant => 1.0,
-                FoodKind::Carcass => -1.0,
-            };
-
-            let k: f64 = 1.0;
-            let cost = (kind * k * genes.diet.into_inner()).exp();
-
-            (*food_pos, dist, cost)
+            let d = (food_pos.0 - pos.0).abs();
+            let dist = (d.x + d.y) / TILE_SZ;
+            let gain = food_energy(genes, details);
+            if gain <= 0.0 {
+                return None;
+            }
+            let cost = (dist * c_move / gain) as f64;
+            Some((*food_pos, dist, cost))
         };
-
-        let c_move = move_cost_per_tile(genes, &params);
-        let idle_burn = burn_rate(genes, &params, 0.0);
-        let attack = genes.attack;
-        let aggression = -genes.diet.into_inner();
 
         let hunt = |(prey_pos, prey_genes): (&WorldPos, &Genes)| -> Option<(WorldPos, f32, f64)> {
             let d = (prey_pos.0 - pos.0).abs();
@@ -222,22 +217,13 @@ fn facing(
             if dist > r {
                 return None;
             }
-            let cost = hunting_cost(
-                prey_genes.size,
-                corpse_energy(prey_genes),
-                dist,
-                attack,
-                aggression as f32,
-                c_move,
-                idle_burn,
-                &params,
-            )?;
+            let cost = hunting_cost(prey_genes.size, dist, genes, &params)?;
             Some((*prey_pos, dist, cost))
         };
 
         let food = qfood
             .iter()
-            .map(food_cost)
+            .filter_map(food_cost)
             .filter(|(_, d, _)| *d <= r)
             .min_by(|a, b| a.2.total_cmp(&b.2));
 
@@ -341,38 +327,58 @@ fn metabolize(
 
 fn eat(
     mut commands: Commands,
-    mut qcreature: Query<(&WorldPos, &mut Stats), With<Creature>>,
+    mut qcreature: Query<(&WorldPos, &Genes, &mut Stats), With<Creature>>,
     qfood: Query<(Entity, &WorldPos, &FoodDetails), With<Food>>,
 ) {
-    // Half a tile's diagonal reaches every point in a tile from its center.
     let eat_radius_squared = TILE_SZ * TILE_SZ / 2.0;
     let mut eaten = EntityHashSet::default();
 
-    for (pos, mut stats) in &mut qcreature {
+    for (pos, genes, mut stats) in &mut qcreature {
         for (entity, food_pos, food_details) in &qfood {
-            if pos.0.distance_squared(food_pos.0) <= eat_radius_squared && eaten.insert(entity) {
-                /* TODO: diet */
-                /* TODO: how do creatures know food isn't fresh? */
-                stats.energy +=
-                    food_details.quality * food_details.freshness.into_inner() as f32 * 2.0;
+            let gain = food_energy(genes, food_details);
+            if gain > 0.0
+                && pos.0.distance_squared(food_pos.0) <= eat_radius_squared
+                && eaten.insert(entity)
+            {
+                stats.energy += gain;
                 commands.entity(entity).despawn();
             }
         }
     }
 }
 
-fn corpse_energy(genes: &Genes) -> f32 {
-    genes.size * 10.0
+/// Linear absorption efficiency: plants use 1 + diet, carcasses use 1 - diet.
+fn food_energy(genes: &Genes, food: &FoodDetails) -> f32 {
+    let diet = genes.diet.into_inner() as f32;
+    let efficiency = match food.kind {
+        FoodKind::Plant => 1.0 + diet,
+        FoodKind::Carcass => 1.0 - diet,
+    };
+    2.0 * food.quality * food.freshness.into_inner() as f32 * efficiency
 }
 
-fn die(mut commands: Commands, q: Query<(Entity, &Genes, &WorldPos, &Stats), With<Creature>>) {
-    for (entity, _, pos, Stats { energy, .. }) in &q {
+// Shared by death and hunting so predicted fresh-carcass yield matches actual food.
+fn corpse_food(p: &SimParams, prey_size: f32) -> FoodDetails {
+    FoodDetails {
+        kind: FoodKind::Carcass,
+        quality: p.carcass_quality_multiplier * prey_size,
+        freshness: UnitInterval::try_new(1.0).unwrap(),
+    }
+}
+
+fn die(
+    mut commands: Commands,
+    q: Query<(Entity, &Genes, &WorldPos, &Stats), With<Creature>>,
+    p: Res<SimParams>,
+) {
+    for (entity, genes, pos, Stats { energy, .. }) in &q {
         if *energy <= 0.0 {
+            let corpse = corpse_food(&p, genes.size);
             commands.spawn(food::bundle(
                 pos.0,
-                FoodKind::Carcass,
-                20.0,
-                UnitInterval::try_new(1.0).unwrap(),
+                corpse.kind,
+                corpse.quality,
+                corpse.freshness,
             ));
 
             commands.entity(entity).despawn();
@@ -502,6 +508,158 @@ mod tests {
         assert!(
             (params.diet_min as f64..=params.diet_max as f64).contains(&genes.diet.into_inner())
         );
+    }
+
+    #[test]
+    fn eating_scales_energy_by_diet_and_leaves_indigestible_food() {
+        for (diet, plant_gain, carcass_gain) in [
+            (-1.0, 0.0, 6.0),
+            (-0.5, 1.5, 4.5),
+            (0.0, 3.0, 3.0),
+            (0.5, 4.5, 1.5),
+            (1.0, 6.0, 0.0),
+        ] {
+            for (kind, expected_gain) in [
+                (FoodKind::Plant, plant_gain),
+                (FoodKind::Carcass, carcass_gain),
+            ] {
+                let mut app = App::new();
+                app.add_systems(Update, eat);
+                let mut genes = genes();
+                genes.diet = SignedUnitInterval::try_new(diet).unwrap();
+                let creature = app
+                    .world_mut()
+                    .spawn(spawn_creature(
+                        GridPos(IVec2::ZERO),
+                        genes,
+                        &SimParams::default(),
+                        &mut rand::rng(),
+                    ))
+                    .id();
+                let food = app
+                    .world_mut()
+                    .spawn(food::bundle(
+                        grid_to_world(IVec2::ZERO),
+                        kind,
+                        3.0,
+                        UnitInterval::try_new(0.5).unwrap(),
+                    ))
+                    .id();
+
+                app.update();
+                assert_eq!(
+                    app.world().get::<Stats>(creature).unwrap().energy,
+                    100.0 + expected_gain
+                );
+                assert_eq!(
+                    app.world().get::<Food>(food).is_some(),
+                    expected_gain == 0.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn food_selection_ignores_food_with_zero_diet_efficiency() {
+        for (diet, preferred, ignored) in [
+            (-1.0, FoodKind::Carcass, FoodKind::Plant),
+            (1.0, FoodKind::Plant, FoodKind::Carcass),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<SimParams>().add_systems(Update, facing);
+            let mut genes = genes();
+            genes.diet = SignedUnitInterval::try_new(diet).unwrap();
+            let cell = IVec2::splat(10);
+            let creature = app
+                .world_mut()
+                .spawn(spawn_creature(
+                    GridPos(cell),
+                    genes,
+                    &SimParams::default(),
+                    &mut rand::rng(),
+                ))
+                .id();
+            for (offset, kind) in [(IVec2::X * 2, preferred), (IVec2::Y, ignored)] {
+                app.world_mut().spawn(food::bundle(
+                    grid_to_world(cell + offset),
+                    kind,
+                    1.0,
+                    UnitInterval::try_new(1.0).unwrap(),
+                ));
+            }
+
+            app.update();
+            assert_eq!(
+                app.world().get::<Facing>(creature).unwrap().0,
+                Some(IVec2::X)
+            );
+        }
+    }
+
+    #[test]
+    fn hunting_uses_absorbed_carcass_energy_and_all_attack_costs() {
+        let params = SimParams {
+            base_cost: 1.0,
+            size_max: 1.0,
+            speed_max: 1.0,
+            attack_max: 10.0,
+            w_size: 0.0,
+            w_vision: 0.0,
+            w_move: 1.0,
+            w_attack: 1.0,
+            ..default()
+        };
+        let mut hunter = genes();
+        for (diet, expected_cost) in [(-1.0, 0.075), (-0.5, 0.1)] {
+            hunter.diet = SignedUnitInterval::try_new(diet).unwrap();
+            // Two tiles cost 1 energy; five seconds of attacking cost 5.
+            let cost = hunting_cost(0.5, 2.0, &hunter, &params).unwrap();
+            assert!((cost - expected_cost).abs() < 1e-6);
+        }
+        // At 70 energy spent, the 60-energy yield loses; the 80-energy yield pays.
+        assert!(hunting_cost(0.5, 130.0, &hunter, &params).is_none());
+        hunter.diet = SignedUnitInterval::try_new(-1.0).unwrap();
+        assert!(hunting_cost(0.5, 130.0, &hunter, &params).is_some());
+        assert!(hunting_cost(0.5, 150.0, &hunter, &params).is_none());
+    }
+
+    #[test]
+    fn only_carnivorous_creatures_hunt_or_attack_even_with_a_negative_aggression_threshold() {
+        for diet in [-1.0, 0.0, 0.5, 1.0] {
+            let params = SimParams {
+                min_aggression: -1.0,
+                ..default()
+            };
+            let mut attacker_genes = genes();
+            attacker_genes.diet = SignedUnitInterval::try_new(diet).unwrap();
+            assert_eq!(
+                hunting_cost(0.5, 0.0, &attacker_genes, &params).is_some(),
+                diet < 0.0
+            );
+            let mut app = app_with_time(1.0);
+            app.add_systems(Update, attack);
+            let attacker = app
+                .world_mut()
+                .spawn(spawn_creature(
+                    GridPos(IVec2::ZERO),
+                    attacker_genes,
+                    &params,
+                    &mut rand::rng(),
+                ))
+                .id();
+            let target = app.world_mut().spawn(test_creature(GridPos(IVec2::X))).id();
+            app.insert_resource(params);
+
+            app.update();
+            assert_eq!(
+                app.world().get::<Stats>(attacker).unwrap().energy < 100.0,
+                diet < 0.0
+            );
+            assert_eq!(
+                app.world().get::<Stats>(target).unwrap().energy,
+                if diet < 0.0 { 80.0 } else { 100.0 }
+            );
+        }
     }
 
     #[test]

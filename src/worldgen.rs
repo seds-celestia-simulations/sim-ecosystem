@@ -370,8 +370,9 @@ mod tests {
 
     #[test]
     fn fixed_simulation_decomposes_food_before_creatures_choose_and_eat_it() {
-        use crate::creature::{Creature, CreaturePlugin, GridPos, Stats, WorldPos};
+        use crate::creature::{Creature, CreaturePlugin, Genes, GridPos, Stats, WorldPos};
         use crate::food::{Food, FoodPlugin};
+        use crate::ranged::SignedUnitInterval;
         use crate::sim::SimParams;
         use std::time::Duration;
 
@@ -390,13 +391,14 @@ mod tests {
         app.update();
 
         let pos = grid_to_world(IVec2::ZERO);
-        for (mut grid, mut world_pos) in app
+        for (mut grid, mut world_pos, mut genes) in app
             .world_mut()
-            .query_filtered::<(&mut GridPos, &mut WorldPos), With<Creature>>()
+            .query_filtered::<(&mut GridPos, &mut WorldPos, &mut Genes), With<Creature>>()
             .iter_mut(app.world_mut())
         {
             grid.0 = IVec2::ZERO;
             world_pos.0 = pos;
+            genes.diet = SignedUnitInterval::try_new(0.0).unwrap();
         }
         app.world_mut().spawn(bundle(
             pos,
