@@ -66,12 +66,7 @@ impl Genes {
 #[derive(Component)]
 pub struct Stats {
     pub energy: f32,
-}
-
-impl Default for Stats {
-    fn default() -> Self {
-        Self { energy: 100.0 }
-    }
+    pub reproduction_ticks_remaining: u32,
 }
 
 pub struct CreaturePlugin;
@@ -79,19 +74,15 @@ pub struct CreaturePlugin;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreatureSimulation;
 
-#[derive(Resource, Default)]
-pub struct Counter(u32);
-
 impl Plugin for CreaturePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SimParams>()
-            .init_resource::<Counter>()
             .add_systems(Startup, spawn)
             .add_systems(Update, update)
             .add_systems(
                 FixedUpdate,
                 (
-                    facing, start_step, advance, attack, eat, metabolize, die, reproduce,
+                    facing, start_step, advance, attack, eat, metabolize, reproduce, die,
                 )
                     .chain()
                     .in_set(CreatureSimulation),
@@ -356,7 +347,7 @@ fn corpse_energy(genes: &Genes) -> f32 {
 }
 
 fn die(mut commands: Commands, q: Query<(Entity, &Genes, &WorldPos, &Stats), With<Creature>>) {
-    for (entity, _, pos, Stats { energy }) in &q {
+    for (entity, _, pos, Stats { energy, .. }) in &q {
         if *energy <= 0.0 {
             commands.spawn(food::bundle(
                 pos.0,
@@ -384,26 +375,38 @@ fn pick_direction(gpos: &GridPos, rng: &mut impl rand::Rng) -> Option<IVec2> {
 
 fn reproduce(
     mut commands: Commands,
-    q: Query<(&Genes, &GridPos), With<Creature>>,
-    mut counter: ResMut<Counter>,
+    mut q: Query<(&Genes, &GridPos, &mut Stats), With<Creature>>,
     params: Res<SimParams>,
 ) {
-    if counter.0 < params.reproduction_tick.get() {
-        counter.0 += 1;
-        return;
-    }
+    let mut rng = rand::rng();
+    for (genes, gpos, mut stats) in &mut q {
+        if stats.energy <= 0.0 {
+            continue;
+        }
 
-    counter.0 = 0;
+        stats.reproduction_ticks_remaining = stats.reproduction_ticks_remaining.saturating_sub(1);
+        if stats.reproduction_ticks_remaining > 0 {
+            continue;
+        }
 
-    for (genes, gpos) in &q {
-        let mut rng = rand::rng();
+        stats.energy -= params.reproduction_cost;
+        if stats.energy <= 0.0 {
+            continue;
+        }
+
+        stats.reproduction_ticks_remaining = rng.random_range(params.reproduction_tick.clone());
         let genes_ = genes.mutate(&mut rng, &params);
         let gpos_ = GridPos(gpos.0 + pick_direction(&gpos, &mut rng).unwrap_or(IVec2::ZERO));
-        commands.spawn(spawn_creature(gpos_, genes_));
+        commands.spawn(spawn_creature(gpos_, genes_, &params, &mut rng));
     }
 }
 
-fn spawn_creature(gpos: GridPos, genes: Genes) -> impl Bundle {
+fn spawn_creature<R: Rng>(
+    gpos: GridPos,
+    genes: Genes,
+    params: &SimParams,
+    rng: &mut R,
+) -> impl Bundle + use<R> {
     let pos = grid_to_world(gpos.0);
     let rect = Vec2::splat(TILE_SZ * genes.size);
 
@@ -421,14 +424,17 @@ fn spawn_creature(gpos: GridPos, genes: Genes) -> impl Bundle {
         gpos,
         genes,
         Facing::default(),
-        Stats::default(),
+        Stats {
+            energy: 100.0,
+            reproduction_ticks_remaining: rng.random_range(params.reproduction_tick.clone()),
+        },
         Transform::from_translation(pos.extend(0.0)),
         Visibility::default(),
         children![(sprite, Transform::from_xyz(0.0, 0.0, 0.5),)],
     )
 }
 
-fn spawn(mut commands: Commands) {
+fn spawn(mut commands: Commands, params: Res<SimParams>) {
     /* TODO: procedural color
      * TODO: default position */
 
@@ -441,7 +447,7 @@ fn spawn(mut commands: Commands) {
         diet: SignedUnitInterval::try_new(0.0).unwrap(),
     };
 
-    commands.spawn(spawn_creature(gpos, genes));
+    commands.spawn(spawn_creature(gpos, genes, &params, &mut rand::rng()));
 }
 
 #[cfg(test)]
@@ -459,6 +465,10 @@ mod tests {
         }
     }
 
+    fn test_creature(gpos: GridPos) -> impl Bundle {
+        spawn_creature(gpos, genes(), &SimParams::default(), &mut rand::rng())
+    }
+
     fn app_with_time(seconds: f32) -> App {
         let mut app = App::new();
         let mut time = Time::<()>::default();
@@ -472,10 +482,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TransformPlugin).add_systems(Update, update);
         let cell = IVec2::splat(GRID_SIZE - 1);
-        let creature = app
-            .world_mut()
-            .spawn(spawn_creature(GridPos(cell), genes()))
-            .id();
+        let creature = app.world_mut().spawn(test_creature(GridPos(cell))).id();
         assert_eq!(
             app.world().get::<WorldPos>(creature).unwrap().0,
             grid_to_world(cell)
@@ -503,10 +510,7 @@ mod tests {
         let mut app = app_with_time(1.0);
         app.add_systems(Update, (start_step, advance).chain());
         let cell = IVec2::new(12, 34);
-        let newborn = app
-            .world_mut()
-            .spawn(spawn_creature(GridPos(cell), genes()))
-            .id();
+        let newborn = app.world_mut().spawn(test_creature(GridPos(cell))).id();
         app.world_mut().get_mut::<Facing>(newborn).unwrap().0 = Some(IVec2::X);
 
         for corner in [
@@ -516,10 +520,7 @@ mod tests {
             IVec2::splat(GRID_SIZE - 1),
         ] {
             for dir in [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
-                let creature = app
-                    .world_mut()
-                    .spawn(spawn_creature(GridPos(corner), genes()))
-                    .id();
+                let creature = app.world_mut().spawn(test_creature(GridPos(corner))).id();
                 app.world_mut().get_mut::<Facing>(creature).unwrap().0 = Some(dir);
             }
         }
@@ -551,12 +552,12 @@ mod tests {
         for cell in [IVec2::ZERO, IVec2::new(42, 60), IVec2::splat(GRID_SIZE - 1)] {
             let mut app = App::new();
             app.init_resource::<SimParams>()
-                .insert_resource(Counter(SimParams::default().reproduction_tick.get()))
                 .add_systems(Update, reproduce);
-            let parent = app
-                .world_mut()
-                .spawn(spawn_creature(GridPos(cell), genes()))
-                .id();
+            let parent = app.world_mut().spawn(test_creature(GridPos(cell))).id();
+            app.world_mut()
+                .get_mut::<Stats>(parent)
+                .unwrap()
+                .reproduction_ticks_remaining = 1;
             app.update();
 
             let mut query = app
@@ -570,6 +571,155 @@ mod tests {
                     assert_eq!(pos.0, grid_to_world(grid.0));
                     assert_eq!(pos.0.distance(grid_to_world(cell)), TILE_SZ);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_samples_each_countdown_from_the_configured_range() {
+        use rand::SeedableRng;
+
+        let params = SimParams {
+            reproduction_tick: 2..=4,
+            ..default()
+        };
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let mut world = World::new();
+        let mut countdowns = Vec::new();
+        for _ in 0..32 {
+            let creature = world.spawn(spawn_creature(
+                GridPos(IVec2::ZERO),
+                genes(),
+                &params,
+                &mut rng,
+            ));
+            countdowns.push(
+                creature
+                    .get::<Stats>()
+                    .unwrap()
+                    .reproduction_ticks_remaining,
+            );
+        }
+        assert!(
+            countdowns
+                .iter()
+                .all(|ticks| params.reproduction_tick.contains(ticks))
+        );
+        assert!(countdowns.contains(&2));
+        assert!(countdowns.contains(&4));
+    }
+
+    #[test]
+    fn creatures_count_down_independently_and_reroll_after_reproducing() {
+        let mut app = App::new();
+        app.insert_resource(SimParams {
+            reproduction_tick: 7..=7,
+            reproduction_cost: 25.0,
+            ..default()
+        })
+        .add_systems(Update, reproduce);
+        let parent = app
+            .world_mut()
+            .spawn(test_creature(GridPos(IVec2::ZERO)))
+            .id();
+        let other = app
+            .world_mut()
+            .spawn(test_creature(GridPos(IVec2::ONE)))
+            .id();
+        app.world_mut()
+            .get_mut::<Stats>(parent)
+            .unwrap()
+            .reproduction_ticks_remaining = 2;
+        app.world_mut()
+            .get_mut::<Stats>(other)
+            .unwrap()
+            .reproduction_ticks_remaining = 4;
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<Stats>(parent)
+                .unwrap()
+                .reproduction_ticks_remaining,
+            1
+        );
+        assert_eq!(
+            app.world()
+                .get::<Stats>(other)
+                .unwrap()
+                .reproduction_ticks_remaining,
+            3
+        );
+        assert_eq!(app.world().get::<Stats>(parent).unwrap().energy, 100.0);
+        assert_eq!(
+            app.world_mut()
+                .query::<&Creature>()
+                .iter(app.world())
+                .count(),
+            2
+        );
+
+        app.update();
+        let stats = app.world().get::<Stats>(parent).unwrap();
+        assert_eq!(stats.reproduction_ticks_remaining, 7);
+        assert_eq!(stats.energy, 75.0);
+        let stats = app.world().get::<Stats>(other).unwrap();
+        assert_eq!(stats.reproduction_ticks_remaining, 2);
+        assert_eq!(stats.energy, 100.0);
+        let mut query = app
+            .world_mut()
+            .query_filtered::<(Entity, &Stats), With<Creature>>();
+        assert_eq!(query.iter(app.world()).count(), 3);
+        let (_, newborn) = query
+            .iter(app.world())
+            .find(|(entity, _)| *entity != parent && *entity != other)
+            .unwrap();
+        assert_eq!(newborn.reproduction_ticks_remaining, 7);
+        assert_eq!(newborn.energy, 100.0);
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<Stats>(parent)
+                .unwrap()
+                .reproduction_ticks_remaining,
+            6
+        );
+    }
+
+    #[test]
+    fn reproduction_requires_strictly_positive_energy_after_paying_the_cost() {
+        for energy in [0.0, 49.0, 50.0, 51.0] {
+            let mut app = App::new();
+            app.init_resource::<SimParams>()
+                .add_systems(Update, (reproduce, die).chain());
+            let parent = app
+                .world_mut()
+                .spawn(test_creature(GridPos(IVec2::ZERO)))
+                .id();
+            {
+                let mut stats = app.world_mut().get_mut::<Stats>(parent).unwrap();
+                stats.energy = energy;
+                stats.reproduction_ticks_remaining = 1;
+            }
+
+            app.update();
+            let creatures = app
+                .world_mut()
+                .query::<&Creature>()
+                .iter(app.world())
+                .count();
+            let carcasses = app.world_mut().query::<&Food>().iter(app.world()).count();
+            if energy > 50.0 {
+                assert_eq!(creatures, 2);
+                assert_eq!(carcasses, 0);
+                let stats = app.world().get::<Stats>(parent).unwrap();
+                assert_eq!(stats.energy, 1.0);
+                assert!((800..=1200).contains(&stats.reproduction_ticks_remaining));
+            } else {
+                assert_eq!(creatures, 0);
+                assert_eq!(carcasses, 1);
+                assert!(app.world().get::<Creature>(parent).is_none());
             }
         }
     }

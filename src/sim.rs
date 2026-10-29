@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::ops::RangeInclusive;
 
 use bevy::prelude::*;
 
@@ -10,7 +10,8 @@ pub struct SimParams {
     pub food_decay_rate: f32,
     pub gene_pick_probability: UnitInterval,
     pub gene_mutation_factor: UnitInterval,
-    pub reproduction_tick: NonZeroU32,
+    pub reproduction_tick: RangeInclusive<u32>,
+    pub reproduction_cost: f32,
     pub attack_radius: f32,
 
     pub speed_max: f32,
@@ -35,12 +36,13 @@ impl Default for SimParams {
             food_decay_rate: 0.05,
             gene_pick_probability: UnitInterval::try_new(0.3).unwrap(),
             gene_mutation_factor: UnitInterval::try_new(0.1).unwrap(),
-            reproduction_tick: NonZeroU32::new(1000).unwrap(),
+            reproduction_tick: 800..=1200,
+            reproduction_cost: 50.0,
             attack_radius: 3.0,
 
             speed_max: 10.0,
             size_max: 0.95,
-            vision_radius_max: 42,
+            vision_radius_max: 32,
             attack_max: 30.0,
 
             min_aggression: 0.0,
