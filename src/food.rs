@@ -2,11 +2,11 @@ use bevy::prelude::*;
 
 use crate::GRID_SIZE;
 use crate::creature::{CreatureSimulation, WorldPos};
+use crate::ranged::UnitInterval;
 use crate::sim::SimParams;
 use crate::worldgen::WorldGrid;
 use crate::{grid_to_world, world_to_grid};
 use rand::RngExt;
-use crate::ranged::UnitInterval;
 
 #[derive(Clone, Copy)]
 pub enum FoodKind {
@@ -41,8 +41,6 @@ pub struct FoodDetails {
     digestive efficiency of that creature at consuming the food's kind */
     pub quality: f32,
 
-    /* TODO: an explicit range from [-1, 1] for freshness as a newtype,
-     * the nutype crate seems interesting for this */
     /* TODO: visualize freshness, lerp towards gray, ie.: -1 freshness (stale) is gray */
     pub freshness: UnitInterval,
     pub kind: FoodKind,

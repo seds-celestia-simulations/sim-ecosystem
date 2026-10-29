@@ -3,9 +3,8 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use rand::RngExt;
 
 use crate::food::{FoodKind, bundle};
-use crate::{GRID_SIZE, TILE_SZ, grid_to_world};
 use crate::ranged::UnitInterval;
-
+use crate::{GRID_SIZE, TILE_SZ, grid_to_world};
 
 // ---------------------------------------------------------------------------
 // Tunables

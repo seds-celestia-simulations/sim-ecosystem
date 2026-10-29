@@ -11,14 +11,21 @@ pub struct SimParams {
     pub gene_pick_probability: UnitInterval,
     pub gene_mutation_factor: UnitInterval,
     pub reproduction_tick: NonZeroU32,
+    pub attack_radius: f32,
 
     pub speed_max: f32,
     pub size_max: f32,
     pub vision_radius_max: u32,
+    pub attack_max: f32,
+
+    pub min_aggression: f32,
 
     pub w_size: f32,
     pub w_move: f32,
     pub w_vision: f32,
+    pub w_attack: f32,
+
+    pub max_energy: f32,
 }
 
 impl Default for SimParams {
@@ -29,14 +36,21 @@ impl Default for SimParams {
             gene_pick_probability: UnitInterval::try_new(0.3).unwrap(),
             gene_mutation_factor: UnitInterval::try_new(0.1).unwrap(),
             reproduction_tick: NonZeroU32::new(1000).unwrap(),
+            attack_radius: 3.0,
 
             speed_max: 10.0,
             size_max: 0.95,
             vision_radius_max: 42,
+            attack_max: 30.0,
+
+            min_aggression: 0.0,
 
             w_size: 0.5,
             w_move: 0.35,
             w_vision: 0.15,
+            w_attack: 0.3,
+
+            max_energy: 100.0,
         }
     }
 }

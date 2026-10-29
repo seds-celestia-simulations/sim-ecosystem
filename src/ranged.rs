@@ -20,13 +20,6 @@ pub struct SignedUnitInterval(f64);
 
 impl UnitInterval {
     pub fn new_clamped(f: f64) -> Self {
-        Self::try_new(
-            if f.is_nan() {
-                0.0
-            } else {
-                f.clamp(0.0, 1.0)
-            }
-        )
-        .unwrap()
+        Self::try_new(if f.is_nan() { 0.0 } else { f.clamp(0.0, 1.0) }).unwrap()
     }
 }

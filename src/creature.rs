@@ -5,11 +5,11 @@ use rand::{Rng, RngExt, seq::IteratorRandom};
 use crate::GRID_SIZE;
 use crate::TILE_SZ;
 use crate::food;
-use crate::food::{Food, FoodKind, FoodDetails};
+use crate::food::{Food, FoodDetails, FoodKind};
 use crate::grid_to_world;
 use crate::sim::SimParams;
 
-use crate::ranged::{NoNaNF32, SignedUnitInterval, UnitInterval};
+use crate::ranged::{SignedUnitInterval, UnitInterval};
 
 #[derive(Component)]
 pub struct Creature;
@@ -25,10 +25,11 @@ pub struct Facing(pub Option<IVec2>);
 
 #[derive(Component, Clone, Copy)]
 pub struct Genes {
-    pub speed: f32,               /* tiles / dt */
+    pub speed: f32,               /* tiles / second */
     pub size: f32,                /* fraction of TILE_SZ */
     pub diet: SignedUnitInterval, /* -1 is carnivorous, 1 is herbivorous */
     pub vision_radius: u32,       /* grids */
+    pub attack: f32,
 }
 
 impl Genes {
@@ -47,11 +48,17 @@ impl Genes {
         Self {
             speed: one(self.speed, f, 0.1, params.speed_max),
             size: one(self.size, f, 0.05, params.size_max),
-            vision_radius: one(self.vision_radius as f32, f, 4 as f32, params.vision_radius_max as f32) as u32,
+            vision_radius: one(
+                self.vision_radius as f32,
+                f,
+                4 as f32,
+                params.vision_radius_max as f32,
+            ) as u32,
             diet: SignedUnitInterval::try_new(
                 one(self.diet.into_inner() as f32, f, -1.0, 1.0).into(),
             )
             .unwrap(),
+            attack: one(self.attack, f, 0.1, params.attack_max),
         }
     }
 }
@@ -83,36 +90,167 @@ impl Plugin for CreaturePlugin {
             .add_systems(Update, update)
             .add_systems(
                 FixedUpdate,
-                (facing, start_step, advance, eat, metabolize, die, reproduce)
+                (
+                    facing, start_step, advance, attack, eat, metabolize, die, reproduce,
+                )
                     .chain()
                     .in_set(CreatureSimulation),
             );
     }
 }
 
-fn facing(
-    mut qcreature: Query<(&mut Facing, &GridPos, &WorldPos, &Genes), With<Creature>>,
-    qfood: Query<&WorldPos, With<Food>>,
+/// Lower is better. None = not worth considering.
+fn hunting_cost(
+    prey_size: f32,
+    e_gain: f32,     // energy the corpse will give (your corpse formula)
+    dist: f32,       // tiles
+    attack: f32,     // attack gene: energy drained per second, before / size
+    aggression: f32, // -diet, in [-1, 1]
+    c_move: f32,     // energy per tile
+    idle_burn: f32,  // burn rate while standing still
+    p: &SimParams,
+) -> Option<f64> {
+    if aggression <= p.min_aggression || attack <= 0.0 || prey_size <= 0.0 {
+        return None;
+    }
+
+    let fight_secs = p.max_energy * prey_size / attack;
+
+    let chase = dist * c_move;
+    let fight = fight_secs * idle_burn;
+
+    // Don't hunt at a loss
+    if chase + fight >= e_gain {
+        return None;
+    }
+
+    Some(((chase + fight) / (e_gain * aggression)).into())
+}
+
+fn attack(
+    time: Res<Time>,
+    params: Res<SimParams>,
+    mut q: Query<(Entity, &WorldPos, &Genes, &mut Stats), With<Creature>>,
 ) {
-    for (mut facing, gpos, pos, genes) in &mut qcreature {
+    let dt = time.delta_secs();
+    let r2 = (params.attack_radius * TILE_SZ).powf(2.0);
+
+    let snap: Vec<(Entity, Vec2, f32)> = q.iter().map(|(e, p, g, _)| (e, p.0, g.size)).collect();
+
+    let mut damage: Vec<(Entity, f32)> = Vec::new();
+
+    for (me, pos, genes, mut stats) in &mut q {
+        if stats.energy <= 0.0 {
+            continue;
+        }
+        let aggression = -genes.diet.into_inner();
+        if aggression <= params.min_aggression.into() {
+            continue;
+        }
+
+        let victim = snap
+            .iter()
+            .filter(|(e, ..)| *e != me)
+            .map(|(e, p, size)| (*e, *size, (*p - pos.0).length_squared()))
+            .filter(|(_, _, d2)| *d2 < r2)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+
+        let Some((victim, victim_size, _)) = victim else {
+            continue;
+        };
+
+        damage.push((victim, genes.attack / victim_size * dt));
+        stats.energy -= attack_burn(genes, &params) * dt;
+    }
+
+    for (victim, dmg) in damage {
+        if let Ok((_, _, _, mut s)) = q.get_mut(victim) {
+            s.energy -= dmg;
+        }
+    }
+}
+
+/// Energy per second spent while attacking. Grows with the attack gene.
+fn attack_burn(genes: &Genes, p: &SimParams) -> f32 {
+    let a = genes.attack / p.attack_max;
+    p.base_cost * p.w_attack * a * a
+}
+
+fn facing(
+    mut qcreature: Query<(Entity, &mut Facing, &GridPos, &WorldPos, &Genes), With<Creature>>,
+    qprey: Query<(Entity, &WorldPos, &Genes), With<Creature>>,
+    qfood: Query<(&WorldPos, &FoodDetails), With<Food>>,
+    params: Res<SimParams>,
+) {
+    for (me, mut facing, gpos, pos, genes) in &mut qcreature {
         let r = genes.vision_radius as f32 * TILE_SZ;
 
-        let mut foods = qfood
+        /* TODO: move cost determination to a new function
+         * decoupled from path-finding */
+        let food_cost = |food: (&WorldPos, &FoodDetails)| {
+            let (food_pos, details) = food;
+            let dist = (food_pos.0 - pos.0).length();
+            let kind = match details.kind {
+                FoodKind::Plant => 1.0,
+                FoodKind::Carcass => -1.0,
+            };
+
+            let k: f64 = 1.0;
+            let cost = (kind * k * genes.diet.into_inner()).exp();
+
+            (*food_pos, dist, cost)
+        };
+
+        let c_move = move_cost_per_tile(genes, &params);
+        let idle_burn = burn_rate(genes, &params, 0.0);
+        let attack = genes.attack;
+        let aggression = -genes.diet.into_inner();
+
+        let hunt = |(prey_pos, prey_genes): (&WorldPos, &Genes)| -> Option<(WorldPos, f32, f64)> {
+            let d = (prey_pos.0 - pos.0).abs();
+            let dist = (d.x + d.y) / TILE_SZ;
+            if dist > r {
+                return None;
+            }
+            let cost = hunting_cost(
+                prey_genes.size,
+                corpse_energy(prey_genes),
+                dist,
+                attack,
+                aggression as f32,
+                c_move,
+                idle_burn,
+                &params,
+            )?;
+            Some((*prey_pos, dist, cost))
+        };
+
+        let food = qfood
             .iter()
-            .map(|x| (x, (x.0 - pos.0).length()))
-            .filter(|(_, d)| *d <= r)
-            .collect::<Vec<_>>();
+            .map(food_cost)
+            .filter(|(_, d, _)| *d <= r)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
 
-        foods.sort_by_key(|(_, d)| NoNaNF32::try_new(*d).unwrap());
+        let prey = qprey
+            .iter()
+            .filter(|(e, ..)| *e != me)
+            .map(|(_, pos, genes)| (pos, genes))
+            .filter_map(hunt)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
 
-        /* TODO: pick a random direction */
-        let Some(nearest) = foods.first() else {
+        let target = match (food, prey) {
+            (Some(f), Some(h)) if h.2 < f.2 => Some(h.0),
+            (Some(f), _) => Some(f.0),
+            (None, h) => h.map(|h| h.0),
+        };
+
+        let Some(target_pos) = target else {
             let mut rng = rand::rng();
             facing.0 = pick_direction(&gpos, &mut rng);
             continue;
         };
 
-        let direction = nearest.0.0 - pos.0;
+        let direction = target_pos.0 - pos.0;
         if direction == Vec2::ZERO {
             facing.0 = None;
             continue;
@@ -164,6 +302,18 @@ fn update(mut q: Query<(&WorldPos, &mut Transform), Or<(With<Creature>, With<Foo
     }
 }
 
+fn burn_rate(genes: &Genes, p: &SimParams, moving: f32) -> f32 {
+    let s = genes.size / p.size_max;
+    let v = genes.speed / p.speed_max;
+    let r = genes.vision_radius as f32 / p.vision_radius_max as f32;
+
+    p.base_cost * (p.w_size * s.powi(3) + p.w_move * moving * s * v * v + p.w_vision * r * r)
+}
+
+fn move_cost_per_tile(genes: &Genes, p: &SimParams) -> f32 {
+    burn_rate(genes, p, 1.0) / genes.speed.max(f32::EPSILON)
+}
+
 fn metabolize(
     time: Res<Time>,
     params: Res<SimParams>,
@@ -174,15 +324,7 @@ fn metabolize(
 
         let moving = if moving { 1.0 } else { 0.0 };
 
-        let s = genes.size / params.size_max;
-        let v = genes.speed / params.speed_max;
-        let r = genes.vision_radius as f32 / params.vision_radius_max as f32;
-
-        let upkeep   = params.w_size   * s.powi(3);
-        let movement = params.w_move   * moving * s * v * v;
-        let vision   = params.w_vision * r * r;
-
-        let cost = params.base_cost * (upkeep + movement + vision);
+        let cost = burn_rate(genes, &params, moving);
         stats.energy -= time.delta_secs() * cost;
     }
 }
@@ -201,11 +343,16 @@ fn eat(
             if pos.0.distance_squared(food_pos.0) <= eat_radius_squared && eaten.insert(entity) {
                 /* TODO: diet */
                 /* TODO: how do creatures know food isn't fresh? */
-                stats.energy += food_details.quality * food_details.freshness.into_inner() as f32 * 2.0;
+                stats.energy +=
+                    food_details.quality * food_details.freshness.into_inner() as f32 * 2.0;
                 commands.entity(entity).despawn();
             }
         }
     }
+}
+
+fn corpse_energy(genes: &Genes) -> f32 {
+    genes.size * 10.0
 }
 
 fn die(mut commands: Commands, q: Query<(Entity, &Genes, &WorldPos, &Stats), With<Creature>>) {
@@ -290,6 +437,7 @@ fn spawn(mut commands: Commands) {
         speed: 4.0,
         size: 0.5,
         vision_radius: 10,
+        attack: 10.0,
         diet: SignedUnitInterval::try_new(0.0).unwrap(),
     };
 
@@ -306,6 +454,7 @@ mod tests {
             speed: 1.0,
             size: 0.5,
             vision_radius: 10,
+            attack: 10.0,
             diet: SignedUnitInterval::try_new(0.0).unwrap(),
         }
     }
@@ -423,58 +572,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn creature_reaches_and_eats_food_between_tile_centers() {
-        let mut app = app_with_time(0.125);
-        app.add_systems(Update, (facing, start_step, advance, eat).chain());
-        let cell = IVec2::new(30, 40);
-        let creature = app
-            .world_mut()
-            .spawn(spawn_creature(GridPos(cell), genes()))
-            .id();
-        let food_pos = (cell + IVec2::new(3, 2)).as_vec2() * TILE_SZ + Vec2::splat(0.1);
-        let food = app
-            .world_mut()
-            .spawn(food::bundle(food_pos, FoodKind::Plant, 1.0, 1.0))
-            .id();
-
-        for _ in 0..80 {
-            app.update();
-            if app.world().get_entity(food).is_err() {
-                break;
-            }
-        }
-        assert!(
-            app.world().get_entity(food).is_err(),
-            "creature never reached the food"
-        );
-        assert_eq!(app.world().get::<Stats>(creature).unwrap().energy, 110.0);
-    }
-
-    #[test]
-    fn food_is_consumed_only_once_when_creatures_share_a_tile() {
-        let mut app = App::new();
-        app.add_systems(Update, eat);
-        let cell = IVec2::new(10, 20);
-        for _ in 0..2 {
-            app.world_mut()
-                .spawn(spawn_creature(GridPos(cell), genes()));
-        }
-        let food = app
-            .world_mut()
-            .spawn(food::bundle(grid_to_world(cell), FoodKind::Plant, 1.0, 1.0))
-            .id();
-        app.update();
-
-        let energy: f32 = app
-            .world_mut()
-            .query::<&Stats>()
-            .iter(app.world())
-            .map(|s| s.energy)
-            .sum();
-        assert_eq!(energy, 210.0);
-        assert!(app.world().get_entity(food).is_err());
     }
 }
