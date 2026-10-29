@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn fixed_simulation_decomposes_food_before_creatures_choose_and_eat_it() {
-        use crate::creature::{Creature, CreaturePlugin, Stats};
+        use crate::creature::{Creature, CreaturePlugin, GridPos, Stats, WorldPos};
         use crate::food::{Food, FoodPlugin};
         use crate::sim::SimParams;
         use std::time::Duration;
@@ -381,6 +381,7 @@ mod tests {
         app.insert_resource(time)
             .insert_resource(grassland())
             .insert_resource(SimParams {
+                initial_creature_count: 1,
                 base_cost: 0.0,
                 food_decay_rate: 0.0,
                 ..default()
@@ -389,6 +390,14 @@ mod tests {
         app.update();
 
         let pos = grid_to_world(IVec2::ZERO);
+        for (mut grid, mut world_pos) in app
+            .world_mut()
+            .query_filtered::<(&mut GridPos, &mut WorldPos), With<Creature>>()
+            .iter_mut(app.world_mut())
+        {
+            grid.0 = IVec2::ZERO;
+            world_pos.0 = pos;
+        }
         app.world_mut().spawn(bundle(
             pos,
             FoodKind::Carcass,

@@ -33,32 +33,51 @@ pub struct Genes {
 }
 
 impl Genes {
-    fn mutate(&self, rng: &mut impl Rng, params: &Res<SimParams>) -> Self {
+    fn random(rng: &mut impl Rng, params: &SimParams) -> Self {
+        Self {
+            speed: rng.random_range(params.speed_min..=params.speed_max),
+            size: rng.random_range(params.size_min..=params.size_max),
+            vision_radius: rng.random_range(params.vision_radius_min..=params.vision_radius_max),
+            attack: rng.random_range(params.attack_min..=params.attack_max),
+            diet: SignedUnitInterval::try_new(
+                rng.random_range(params.diet_min..=params.diet_max).into(),
+            )
+            .unwrap(),
+        }
+    }
+
+    fn mutate(&self, rng: &mut impl Rng, params: &SimParams) -> Self {
         let p = params.gene_pick_probability.into_inner() as f32;
         let f = params.gene_mutation_factor.into_inner() as f32;
         let mut one = |gene: f32, factor: f32, min: f32, max: f32| -> f32 {
             if rng.random_bool(p.into()) {
-                let range = (1.0 - factor)..(1.0 + factor);
-                gene * rng.random_range(range).clamp(min, max)
+                let range = (1.0 - factor)..=(1.0 + factor);
+                (gene * rng.random_range(range)).clamp(min, max)
             } else {
                 gene
             }
         };
 
         Self {
-            speed: one(self.speed, f, 0.1, params.speed_max),
-            size: one(self.size, f, 0.05, params.size_max),
+            speed: one(self.speed, f, params.speed_min, params.speed_max),
+            size: one(self.size, f, params.size_min, params.size_max),
             vision_radius: one(
                 self.vision_radius as f32,
                 f,
-                4 as f32,
+                params.vision_radius_min as f32,
                 params.vision_radius_max as f32,
             ) as u32,
             diet: SignedUnitInterval::try_new(
-                one(self.diet.into_inner() as f32, f, -1.0, 1.0).into(),
+                one(
+                    self.diet.into_inner() as f32,
+                    f,
+                    params.diet_min,
+                    params.diet_max,
+                )
+                .into(),
             )
             .unwrap(),
-            attack: one(self.attack, f, 0.1, params.attack_max),
+            attack: one(self.attack, f, params.attack_min, params.attack_max),
         }
     }
 }
@@ -435,19 +454,15 @@ fn spawn_creature<R: Rng>(
 }
 
 fn spawn(mut commands: Commands, params: Res<SimParams>) {
-    /* TODO: procedural color
-     * TODO: default position */
-
-    let gpos = GridPos(IVec2::new(0, 0));
-    let genes = Genes {
-        speed: 4.0,
-        size: 0.5,
-        vision_radius: 10,
-        attack: 10.0,
-        diet: SignedUnitInterval::try_new(0.0).unwrap(),
-    };
-
-    commands.spawn(spawn_creature(gpos, genes, &params, &mut rand::rng()));
+    let mut rng = rand::rng();
+    for _ in 0..params.initial_creature_count {
+        let gpos = GridPos(IVec2::new(
+            rng.random_range(0..GRID_SIZE),
+            rng.random_range(0..GRID_SIZE),
+        ));
+        let genes = Genes::random(&mut rng, &params);
+        commands.spawn(spawn_creature(gpos, genes, &params, &mut rng));
+    }
 }
 
 #[cfg(test)]
@@ -475,6 +490,86 @@ mod tests {
         time.advance_by(Duration::from_secs_f32(seconds));
         app.insert_resource(time);
         app
+    }
+
+    fn assert_genes_in_bounds(genes: &Genes, params: &SimParams) {
+        assert!((params.speed_min..=params.speed_max).contains(&genes.speed));
+        assert!((params.size_min..=params.size_max).contains(&genes.size));
+        assert!(
+            (params.vision_radius_min..=params.vision_radius_max).contains(&genes.vision_radius)
+        );
+        assert!((params.attack_min..=params.attack_max).contains(&genes.attack));
+        assert!(
+            (params.diet_min as f64..=params.diet_max as f64).contains(&genes.diet.into_inner())
+        );
+    }
+
+    #[test]
+    fn startup_scatters_the_configured_population_with_bounded_genes() {
+        for count in [0, 32] {
+            let params = SimParams {
+                initial_creature_count: count,
+                speed_min: 2.0,
+                speed_max: 3.0,
+                size_min: 0.2,
+                size_max: 0.3,
+                vision_radius_min: 6,
+                vision_radius_max: 8,
+                attack_min: 3.0,
+                attack_max: 4.0,
+                diet_min: -0.6,
+                diet_max: -0.4,
+                ..default()
+            };
+            let mut app = App::new();
+            app.insert_resource(params).add_systems(Startup, spawn);
+            app.update();
+
+            let mut query = app
+                .world_mut()
+                .query_filtered::<(&GridPos, &WorldPos, &Genes, &Stats), With<Creature>>();
+            let params = app.world().resource::<SimParams>();
+            assert_eq!(query.iter(app.world()).count(), count as usize);
+            for (grid, pos, genes, stats) in query.iter(app.world()) {
+                assert!(in_bounds(grid.0));
+                assert_eq!(pos.0, grid_to_world(grid.0));
+                assert_genes_in_bounds(genes, params);
+                assert!(
+                    params
+                        .reproduction_tick
+                        .contains(&stats.reproduction_ticks_remaining)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mutation_keeps_random_genes_within_configured_bounds() {
+        use rand::SeedableRng;
+
+        let mut params = SimParams {
+            speed_min: 2.0,
+            speed_max: 3.0,
+            size_min: 0.2,
+            size_max: 0.3,
+            vision_radius_min: 6,
+            vision_radius_max: 8,
+            attack_min: 3.0,
+            attack_max: 4.0,
+            diet_min: 0.4,
+            diet_max: 0.6,
+            gene_pick_probability: UnitInterval::try_new(1.0).unwrap(),
+            ..default()
+        };
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        for factor in [0.0, 1.0] {
+            params.gene_mutation_factor = UnitInterval::try_new(factor).unwrap();
+            let mut genes = Genes::random(&mut rng, &params);
+            for _ in 0..128 {
+                genes = genes.mutate(&mut rng, &params);
+                assert_genes_in_bounds(&genes, &params);
+            }
+        }
     }
 
     #[test]
