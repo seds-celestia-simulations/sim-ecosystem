@@ -8,7 +8,7 @@ use crate::creature::{Creature, WorldPos};
 use crate::TILE_SZ;
 
 const ZOOM_MIN: f32 = 0.25;
-const ZOOM_MAX: f32 = 4.0;
+const ZOOM_MAX: f32 = 12.0;
 const ZOOM_PER_LINE: f32 = 0.1;
 const ZOOM_PER_PIXEL: f32 = 0.002;
 
