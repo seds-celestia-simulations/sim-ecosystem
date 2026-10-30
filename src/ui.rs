@@ -3,6 +3,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::camera::Follow;
 use crate::creature::{Creature, Genes, GridPos, Stats};
+use crate::ranged::SignedUnitInterval;
 use crate::sim::SimParams;
 
 pub struct UiPlugin;
@@ -34,9 +35,13 @@ fn inspector(
         ui.heading("Genes");
         ui.add(egui::Slider::new(&mut genes.speed, 0.5..=8.0).text("speed (tiles/s)"));
         ui.add(egui::Slider::new(&mut genes.size, 0.0..=1.0).text("size (fraction of tile_size)"));
+        let mut temp_diet = genes.diet.into_inner();
+        ui.add(egui::Slider::new(&mut temp_diet, -1.0..=1.0).text("diet (continuous range from -1(carnivore) to 1(herbivore)"));
+        genes.diet = SignedUnitInterval::try_new(temp_diet).unwrap();
+        ui.add(egui::Slider::new(&mut genes.vision_radius, 4..=32).text("vision radius (tiles)"));
         ui.separator();
         ui.heading("State (energy)");
-        let frac = (stats.energy / 100.0).clamp(0.0, 1.0);
+        let frac = (stats.energy/100.0).clamp(0.0, 1.0);
         ui.add(egui::ProgressBar::new(frac).text(format!("{:.1} / {:.0}", stats.energy, 100.0)));
     });
 }

@@ -237,7 +237,7 @@ fn attack(
             continue;
         };
 
-        damage.push((victim, genes.attack / victim_size * dt));
+        damage.push((victim, genes.attack / (victim_size * victim_size) * dt));
         stats.energy -= attack_burn(genes, &params) * dt;
     }
 
@@ -457,7 +457,7 @@ fn eat(
                 && pos.0.distance_squared(food_pos.0) <= eat_radius_squared
                 && eaten.insert(entity)
             {
-                stats.energy = (stats.energy + gain).max(params.max_energy);
+                stats.energy = (stats.energy + gain).min(params.max_energy);
                 commands.entity(entity).despawn();
             }
         }

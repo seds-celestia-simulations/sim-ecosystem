@@ -71,10 +71,10 @@ impl Biome {
 
     fn plant_density(self) -> f32 {
         match self {
-            Biome::Rainforest => 0.30,
-            Biome::Grassland => 0.12,
-            Biome::Desert => 0.01,
-            Biome::Snowy => 0.005,
+            Biome::Rainforest => 0.15,
+            Biome::Grassland => 0.06,
+            Biome::Desert => 0.005,
+            Biome::Snowy => 0.0075,
         }
     }
 

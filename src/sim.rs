@@ -49,10 +49,10 @@ impl Default for SimParams {
             gene_pick_probability: UnitInterval::try_new(0.3).unwrap(),
             gene_mutation_factor: UnitInterval::try_new(0.1).unwrap(),
             reproduction_tick: 1800..=2700,
-            plant_regrow_tick: 1000,
+            plant_regrow_tick: 800,
             reproduction_cost: 50.0,
             attack_radius: 3.0,
-            carcass_quality_multiplier: 40.0,
+            carcass_quality_multiplier: 20.0,
 
 
 
