@@ -262,7 +262,15 @@ fn facing(
 ) {
     let prey_snapshot: Vec<_> = qprey
         .iter()
-        .map(|(e, pos, genes)| (e, *pos, genes.size, genes.perceptual_hash(&params)))
+        .map(|(e, pos, genes)| {
+            (
+                e,
+                *pos,
+                genes.size,
+                genes.perceptual_hash(&params),
+                -genes.diet.into_inner() as f32,
+            )
+        })
         .collect();
 
     for (me, mut facing, gpos, pos, genes) in &mut qcreature {
@@ -302,9 +310,47 @@ fn facing(
 
         let prey = prey_snapshot
             .iter()
-            .filter(|(e, _, _, hash)| *e != me && !kin_hash.is_kin(*hash))
-            .filter_map(|(_, pos, size, _)| hunt(pos, *size))
+            .filter(|(e, _, _, hash, _)| *e != me && !kin_hash.is_kin(*hash))
+            .filter_map(|(_, pos, size, _, _)| hunt(pos, *size))
             .min_by(|a, b| a.2.total_cmp(&b.2));
+
+        let predator = prey_snapshot
+            .iter()
+            .filter(|(e, _, _, _, _)| *e != me)
+            .filter_map(|(_, predator_pos, _, _, aggression)| {
+                let distance = (predator_pos.0 - pos.0).abs();
+                let dist = (distance.x + distance.y) / TILE_SZ;
+                let my_aggression = -genes.diet.into_inner() as f32;
+                (*aggression > my_aggression && dist <= r).then_some((*predator_pos, dist))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+
+        if let Some((predator_pos, _)) = predator {
+            let away = pos.0 - predator_pos.0;
+            let direction = if away.x.abs() > away.y.abs() {
+                IVec2::new(away.x.signum() as i32, 0)
+            } else {
+                IVec2::new(0, away.y.signum() as i32)
+            };
+            let next = gpos.0 + direction;
+            if in_bounds(next) {
+                facing.0 = Some(direction);
+            } else {
+                let along_wall = if direction.x != 0 {
+                    if away.y >= 0.0 { IVec2::Y } else { IVec2::NEG_Y }
+                } else if away.x >= 0.0 {
+                    IVec2::X
+                } else {
+                    IVec2::NEG_X
+                };
+                facing.0 = if in_bounds(gpos.0 + along_wall) {
+                    Some(along_wall)
+                } else {
+                    Some(-along_wall)
+                };
+            }
+            continue;
+        }
 
         let target = match (food, prey) {
             (Some(f), Some(h)) if h.2 < f.2 => Some(h.0),
