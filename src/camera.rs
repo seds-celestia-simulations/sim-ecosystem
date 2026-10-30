@@ -121,6 +121,7 @@ fn pan(
         camera.translation.x -= motion.delta.x * pan_factor;
         camera.translation.y += motion.delta.y * pan_factor;
         follow.0 = None;
+        
     }
     debug!("panfactpr={}, motion delta={}", pan_factor, motion.delta);
 }
