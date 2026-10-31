@@ -7,8 +7,6 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use std::collections::VecDeque;
 
-mod evolution;
-
 const INTERVAL: f64 = 0.5;
 const MAX_SAMPLES: usize = 1800;
 const COLORS: [egui::Color32; 4] = [
@@ -28,7 +26,6 @@ pub struct GraphPlugin;
 impl Plugin for GraphPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GraphState>()
-            .add_plugins(evolution::EvolutionPlugin)
             .add_systems(EguiPrimaryContextPass, graph);
     }
 }
@@ -76,7 +73,6 @@ fn graph(
     creatures: Query<(&WorldPos, &Genes), With<Creature>>,
     time: Res<Time<Virtual>>,
     mut state: ResMut<GraphState>,
-    mut evolution: ResMut<evolution::EvolutionWindow>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -197,10 +193,8 @@ fn graph(
     egui::Window::new("Regional gene graph")
         .default_width(560.0)
         .vscroll(true)
+        .default_open(false)
         .show(ctx, |ui| {
-            if ui.button("Open evolution window").clicked() {
-                evolution.request_open();
-            }
             ui.label(
                 "Left-drag a box; edges snap to whole tiles. Release to select; Escape cancels.",
             );

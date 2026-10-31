@@ -25,11 +25,11 @@ fn world_to_grid(p: Vec2) -> IVec2 {
 
 fn setup(mut commands: Commands, mut egui_settings: ResMut<EguiGlobalSettings>) {
     egui_settings.auto_create_primary_context = false;
-    let mid = (GRID_SIZE - 1) as f32 / 2.0;
+    let mid = GRID_SIZE as f32 * TILE_SZ / 2.0;
     commands.spawn((
         Camera2d,
         PrimaryEguiContext,
-        Transform::from_xyz(mid, mid, 0.0),
+        Transform::from_xyz(mid, mid, 0.0).with_scale(Vec3::splat(2.0)),
     ));
 }
 
